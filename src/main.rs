@@ -1,5 +1,7 @@
 use image::io::Reader as ImageReader;
 
+const CHARS: [char; 11] = ['@', '#', 'S', '%', '?', '*', '+', ';', ':', ',', ' '];
+
 // #[derive(Debug)]
 struct Image {
     data: Vec<u8>,
@@ -25,4 +27,21 @@ fn read_img(path: &str) -> Result<Image, std::io::Error> {
         height: img.height(),
     };
     Ok(image)
+}
+
+fn convert_pixel(pixel: u32) -> char {
+    assert!(((pixel / 25) as usize) < CHARS.len());
+    CHARS[(pixel / 25) as usize]
+}
+
+fn convert_frame(img: &Image) -> Vec<&String> {
+    let res: Vec<&String> = Vec::with_capacity((img.width * img.height) as usize);
+    for i in 0..img.height {
+        let line: &str;
+        for e in 0..img.width {
+            line = line + (convert_pixel(img.data[i * img.width + e]) as str);
+        }
+        res.push(line);
+    }
+    res
 }
