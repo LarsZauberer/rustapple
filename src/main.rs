@@ -51,7 +51,7 @@ fn play_audio() {
     let (_stream, stream_handle) = OutputStream::try_default().unwrap();
     let file = BufReader::new(File::open("./badapple.mp3").unwrap());
     let source = Decoder::new(file).unwrap();
-    stream_handle.play_raw(source.convert_samples());
+    let _ = stream_handle.play_raw(source.convert_samples());
     std::thread::sleep(std::time::Duration::from_secs(LENGTH)); // Ensure time duration
 }
 
