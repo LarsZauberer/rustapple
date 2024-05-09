@@ -1,9 +1,11 @@
+use image::imageops::{resize, FilterType};
 use image::io::Reader as ImageReader;
 use log::debug;
 use rodio::{source::Source, Decoder, OutputStream};
 use simple_logger::SimpleLogger;
+use std::fmt::{Debug, Formatter};
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Error};
 use std::sync::{Arc, Mutex};
 use std::thread::{spawn, JoinHandle};
 
@@ -22,9 +24,9 @@ struct Image {
     number: usize,
 }
 
-impl std::fmt::Debug for Image {
+impl Debug for Image {
     /// Prints out the frame in ascii art
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let lines: Vec<String> = convert_frame(self);
         let mut frame: String = "".to_owned();
         for i in lines {
@@ -68,11 +70,11 @@ fn play_audio() {
     std::thread::sleep(std::time::Duration::from_secs(LENGTH)); // Ensure time duration
 }
 
-fn read_img(path: &str) -> Result<Image, std::io::Error> {
+fn read_img(path: &str) -> Result<Image, Error> {
     // Load the image file and convert the image to grayscale
     let mut img = ImageReader::open(path)?.decode().unwrap().into_luma8();
     // Resizing image
-    img = image::imageops::resize(&img, SIZE.0, SIZE.1, image::imageops::FilterType::Nearest);
+    img = resize(&img, SIZE.0, SIZE.1, FilterType::Nearest);
 
     // Safe image in struct
     let image: Image = Image {
@@ -113,7 +115,8 @@ fn convert_frame(img: &Image) -> Vec<String> {
 /// Takes a `std::fs::ReadDir` and consumes it. It returns all the paths to the files in a
 /// `Vec<String>`
 fn get_path_strings(reader: std::fs::ReadDir) -> Vec<String> {
-    let paths = reader.collect::<Vec<Result<std::fs::DirEntry, std::io::Error>>>();
+    use std::fs;
+    let paths: Vec<Result<fs::DirEntry, Error>> = reader.collect();
     let mut res: Vec<String> = Vec::with_capacity(paths.len());
     for i in paths {
         res.push(i.unwrap().path().to_str().unwrap().to_string());
@@ -121,9 +124,10 @@ fn get_path_strings(reader: std::fs::ReadDir) -> Vec<String> {
     res
 }
 
-fn read_image_directory(path: &str) -> Result<Vec<Image>, std::io::Error> {
+fn read_image_directory(path: &str) -> Result<Vec<Image>, Error> {
+    use std::fs::{read_dir, ReadDir};
     // Load content of the image directory
-    let paths_reader: std::fs::ReadDir = std::fs::read_dir(path).unwrap();
+    let paths_reader: ReadDir = read_dir(path).unwrap();
     let paths = Arc::new(get_path_strings(paths_reader));
     let n: usize = paths.len(); // Count of the images
 
@@ -145,8 +149,8 @@ fn read_image_directory(path: &str) -> Result<Vec<Image>, std::io::Error> {
 
         // Create the thread
         let handle: JoinHandle<()> = spawn(move || {
-            let mut internal_res: Vec<Image> = Vec::with_capacity((&chunk).clone());
-            for p in data_chunk[(&i - 1) * &chunk..&i * &chunk].iter() {
+            let mut internal_res: Vec<Image> = Vec::with_capacity(chunk);
+            for p in data_chunk[(i - 1) * chunk..i * chunk].iter() {
                 let img: Image = read_img(&p).unwrap();
                 internal_res.push(img);
                 {
