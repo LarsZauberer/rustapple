@@ -2,8 +2,11 @@ let
   pkgs = import <nixpkgs> {};
 in
   pkgs.mkShell {
-    packages = [
+    name = "rustapple";
+    nativeBuildInputs = [
       pkgs.pkg-config
+    ];
+    buildInputs = [
       pkgs.alsa-lib
     ];
   }
