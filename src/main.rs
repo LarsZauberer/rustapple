@@ -12,7 +12,7 @@ const CHARS: [char; 11] = ['@', '#', 'S', '%', '?', '*', '+', ';', ':', ',', ' '
 const FPS: u64 = 30;
 const SIZE: (u32, u32) = (100, 50);
 const LENGTH: u64 = 3 * 60 + 40;
-const THREAD_COUNT: usize = 8;
+const THREAD_COUNT: usize = 32;
 
 #[derive(Clone)]
 struct Image {
@@ -145,18 +145,20 @@ fn read_image_directory(path: &str) -> Result<Vec<Image>, std::io::Error> {
 
         // Create the thread
         let handle: JoinHandle<()> = spawn(move || {
+            let mut internal_res: Vec<Image> = Vec::with_capacity((&chunk).clone());
             for p in data_chunk[(&i - 1) * &chunk..&i * &chunk].iter() {
                 let img: Image = read_img(&p).unwrap();
-                {
-                    let mut res = m.lock().unwrap();
-                    res.push(img);
-                }
+                internal_res.push(img);
                 {
                     let mut c = counter.lock().unwrap();
                     *c += 1;
                     print!("\x1B[2J\x1B[1;1H");
                     println!("Loading process: {}/{}", c, n);
                 }
+            }
+            {
+                let mut res = m.lock().unwrap();
+                res.append(&mut internal_res);
             }
         });
         threads.push(handle);
