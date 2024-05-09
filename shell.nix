@@ -5,8 +5,10 @@ in
     name = "rustapple";
     nativeBuildInputs = [
       pkgs.pkg-config
+      pkgs.alsa-lib
     ];
     buildInputs = [
+      pkgs.pkg-config
       pkgs.alsa-lib
     ];
   }
