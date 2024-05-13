@@ -12,7 +12,7 @@ use std::thread::{spawn, JoinHandle};
 // Constants for the program
 const CHARS: [char; 11] = ['@', '#', 'S', '%', '?', '*', '+', ';', ':', ',', ' '];
 const SIZE: (u32, u32) = (100, 50);
-const THREAD_COUNT: usize = 32;
+const THREAD_COUNT: usize = 8;
 
 #[derive(Clone)]
 struct Image {
@@ -100,73 +100,70 @@ fn read_video_file(path: &str) -> Video {
     use video_rs::decode::Decoder;
 
     let url: &Path = Path::new(path);
-    let mut decoder: Decoder = Decoder::new(url).expect("Failed to create decoder");
+    let decoder: Decoder = Decoder::new(url).expect("Failed to create decoder");
     Video {
         duration: decoder.duration().unwrap().as_secs() as usize,
         fps: decoder.frame_rate() as usize,
-        images: convert_video_to_images(&mut decoder),
+        images: convert_video_to_images(decoder),
     }
 }
 
 /// Converts the frames from the video decoder to an array of images that are downscaled and
 /// grayscale
-fn convert_video_to_images(decoder: &mut video_rs::decode::Decoder) -> Vec<Image> {
+fn convert_video_to_images(decoder: video_rs::decode::Decoder) -> Vec<Image> {
     use image::DynamicImage::ImageRgb8;
     use image::RgbImage;
+
     let counter: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
-
-    let mut frames: Vec<ffmpeg_next::frame::Video> = Vec::with_capacity(7000); // Upper bound for badapple
-
-    for frame in decoder.decode_raw_iter() {
-        if let Ok(frame) = frame {
-            frames.push(frame);
-        } else {
-            break;
-        }
-    }
-
-    let frames_arc: Arc<Vec<ffmpeg_next::frame::Video>> = Arc::new(frames);
-
-    let data_chunk: usize = frames_arc.len() / THREAD_COUNT;
-    let res: Arc<Mutex<Vec<Image>>> = Arc::new(Mutex::new(Vec::with_capacity(frames_arc.len())));
+    let dec: Arc<Mutex<video_rs::decode::Decoder>> = Arc::new(Mutex::new(decoder));
+    let res: Arc<Mutex<Vec<Image>>> = Arc::new(Mutex::new(Vec::with_capacity(7000))); // Upperbound for bad apple
 
     let mut threads: Vec<JoinHandle<()>> = Vec::with_capacity(THREAD_COUNT);
 
-    for i in 0..THREAD_COUNT {
+    for _ in 0..THREAD_COUNT {
+        let dec = Arc::clone(&dec);
         let counter = Arc::clone(&counter);
         let res = Arc::clone(&res);
-        let frames = Arc::clone(&frames_arc);
+
         let thread: JoinHandle<()> = spawn(move || {
-            let mut img_array: Vec<Image> = Vec::with_capacity(data_chunk);
-            let mut index: usize = 0;
-            for frame in &frames[i * data_chunk..(i + 1) * data_chunk] {
-                // Make an image::ImageBuffer from the frame
-                let mut img = ImageRgb8(
-                    RgbImage::from_vec(frame.width(), frame.height(), frame.data(0).to_vec())
-                        .unwrap(),
-                )
-                .to_luma8();
-                // Resize
-                img = resize(&img, SIZE.0, SIZE.1, FilterType::Nearest);
-
-                // Add image to array
-                img_array.push(Image {
-                    data: img.to_vec(),
-                    number: i * data_chunk + index,
-                    width: SIZE.0,
-                    height: SIZE.1,
-                });
-
-                // Critical section of changing the image counter
-                {
+            let mut img_array: Vec<Image> = Vec::with_capacity(7000);
+            loop {
+                // Try to get a frame
+                let (frame, n) = {
+                    let mut dec = dec.lock().unwrap();
                     let mut n = counter.lock().unwrap();
-
-                    // Progress display
                     *n += 1;
-                    print!("\x1B[2J\x1B[1;1H");
-                    println!("Frames processed: {}", n);
+                    (dec.decode_raw(), *n - 1)
+                };
+                // Successfully got frame
+                if let Ok(frame) = frame {
+                    // Make an image::ImageBuffer from the frame
+                    let mut img = ImageRgb8(
+                        RgbImage::from_vec(frame.width(), frame.height(), frame.data(0).to_vec())
+                            .unwrap(),
+                    )
+                    .to_luma8();
+                    // Resize
+                    img = resize(&img, SIZE.0, SIZE.1, FilterType::Nearest);
+
+                    // Critical section of changing the image counter
+                    {
+                        // Add image to array
+                        img_array.push(Image {
+                            data: img.to_vec(),
+                            number: n as usize,
+                            width: SIZE.0,
+                            height: SIZE.1,
+                        });
+
+                        // Progress display
+                        print!("\x1B[2J\x1B[1;1H");
+                        println!("Frames processed: {}", n);
+                    }
+                } else {
+                    // All frames have been processes -> End Thread
+                    break;
                 }
-                index += 1;
             }
             {
                 let mut r = res.lock().unwrap();
