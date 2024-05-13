@@ -6,7 +6,7 @@ use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
-// use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex};
 use std::thread::{spawn, JoinHandle};
 
 // Constants for the program
@@ -113,36 +113,70 @@ fn read_video_file(path: &str) -> Video {
 fn convert_video_to_images(decoder: &mut video_rs::decode::Decoder) -> Vec<Image> {
     use image::DynamicImage::ImageRgb8;
     use image::RgbImage;
-    let mut counter: u64 = 0;
+    let counter: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
 
-    let mut res: Vec<Image> = Vec::with_capacity(7000); // Upper bound for badapple
+    let mut frames: Vec<ffmpeg_next::frame::Video> = Vec::with_capacity(7000); // Upper bound for badapple
 
     for frame in decoder.decode_raw_iter() {
         if let Ok(frame) = frame {
-            // Make an image::ImageBuffer from the frame
-            let mut img = ImageRgb8(
-                RgbImage::from_vec(frame.width(), frame.height(), frame.data(0).to_vec()).unwrap(),
-            )
-            .to_luma8();
-            // Resize
-            img = resize(&img, SIZE.0, SIZE.1, FilterType::Nearest);
-
-            // Add image to array
-            res.push(Image {
-                data: img.to_vec(),
-                number: 0,
-                width: SIZE.0,
-                height: SIZE.1,
-            });
-
-            // Progress display
-            counter += 1;
-            print!("\x1B[2J\x1B[1;1H");
-            println!("Frames processed: {}", counter);
+            frames.push(frame);
         } else {
             break;
         }
     }
 
-    res
+    let data_chunk: usize = frames.len() / THREAD_COUNT;
+    let res: Arc<Mutex<Vec<Image>>> = Arc::new(Mutex::new(Vec::with_capacity(frames.len())));
+
+    let mut threads: Vec<JoinHandle<()>> = Vec::with_capacity(THREAD_COUNT);
+
+    for i in 0..THREAD_COUNT {
+        let counter = Arc::clone(&counter);
+        let res = Arc::clone(&res);
+        let frames = frames[i * data_chunk..(i + 1) * data_chunk].to_vec();
+        let thread: JoinHandle<()> = spawn(move || {
+            let mut img_array: Vec<Image> = Vec::with_capacity(data_chunk);
+            for frame in frames {
+                // Make an image::ImageBuffer from the frame
+                let mut img = ImageRgb8(
+                    RgbImage::from_vec(frame.width(), frame.height(), frame.data(0).to_vec())
+                        .unwrap(),
+                )
+                .to_luma8();
+                // Resize
+                img = resize(&img, SIZE.0, SIZE.1, FilterType::Nearest);
+
+                // Critical section of changing the image counter
+                {
+                    let mut n = counter.lock().unwrap();
+                    // Add image to array
+                    img_array.push(Image {
+                        data: img.to_vec(),
+                        number: (*n) as usize,
+                        width: SIZE.0,
+                        height: SIZE.1,
+                    });
+
+                    // Progress display
+                    *n += 1;
+                    print!("\x1B[2J\x1B[1;1H");
+                    println!("Frames processed: {}", n);
+                }
+            }
+            {
+                let mut r = res.lock().unwrap();
+                r.append(&mut img_array);
+            }
+        });
+
+        threads.push(thread);
+    }
+
+    for i in threads {
+        let _ = i.join();
+    }
+
+    let mut r = res.lock().unwrap();
+    r.sort_by_key(|i| i.number);
+    r.to_vec()
 }
