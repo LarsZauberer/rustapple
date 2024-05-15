@@ -1,5 +1,6 @@
+use clap::Parser;
 use image::imageops::{resize, FilterType};
-use log::debug;
+use log::{debug, error};
 use rodio::{source::Source, Decoder, OutputStream};
 use simple_logger::SimpleLogger;
 use std::fmt::{Debug, Formatter};
@@ -41,19 +42,42 @@ struct Video {
     images: Vec<Image>,
 }
 
+#[derive(Parser, Debug)]
+#[command(version)]
+struct Cli {
+    /// The video file for the application
+    #[arg(short = 'f', long = "file")]
+    file: String,
+
+    /// The audio file for the application
+    #[arg(short = 'a', long = "audio", default_value_t = String::from(""))]
+    audio_file: String,
+
+    /// Number of threads for video processing
+    // TODO: Doesn't work yet
+    #[arg(short = 't', long = "threads", default_value_t = 4)]
+    threads: usize,
+}
+
 fn main() {
     // Initialized the logging system
     SimpleLogger::new().init().unwrap();
     debug!("Logging initialized");
 
+    // CLI Parser
+    let cli: Cli = Cli::parse();
+
     // Create the array of frames
-    let vid: Video = read_video_file("./badapple.mp4");
+    let vid: Video = read_video_file(&cli.file);
     // let imgs: Vec<Image> = read_image_directory("./images").unwrap();
 
     // Create the audio thread
-    let handler: JoinHandle<()> = spawn(move || {
-        play_audio(vid.duration as u64);
-    });
+    let mut handler: Option<JoinHandle<()>> = None;
+    if cli.audio_file != "" {
+        handler = Some(spawn(move || {
+            play_audio(&cli.audio_file, vid.duration as u64);
+        }));
+    }
 
     // Go through all the frames and print it to the terminal
     for i in vid.images {
@@ -65,13 +89,23 @@ fn main() {
     }
 
     // Join the audio thread
-    let _ = handler.join();
+    if let Some(handler) = handler {
+        let _ = handler.join();
+    }
 }
 
-fn play_audio(duration: u64) {
+fn play_audio(path: &str, duration: u64) {
     // Rodio Audio thread
+    // Get path for audio file
+    let path: &Path = Path::new(path);
+    if !path.exists() {
+        error!("The audio file '{:?}' doesn't exist. No such file.", path);
+        panic!("The audio file '{:?}' doesn't exist. No such file.", path)
+    }
+
+    // Play audio file
     let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-    let file = BufReader::new(File::open("./badapple.mp3").unwrap());
+    let file = BufReader::new(File::open(path).unwrap());
     let source = Decoder::new(file).unwrap();
     let _ = stream_handle.play_raw(source.convert_samples());
     std::thread::sleep(std::time::Duration::from_secs(duration)); // Ensure time duration
