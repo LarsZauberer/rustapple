@@ -12,8 +12,6 @@ use std::thread::{spawn, JoinHandle};
 
 // Constants for the program
 const CHARS: [char; 11] = ['@', '#', 'S', '%', '?', '*', '+', ';', ':', ',', ' '];
-const SIZE: (u32, u32) = (100, 50);
-const THREAD_COUNT: usize = 8;
 
 #[derive(Clone)]
 struct Image {
@@ -46,17 +44,25 @@ struct Video {
 #[command(version)]
 struct Cli {
     /// The video file for the application
-    #[arg(short = 'f', long = "file")]
+    #[arg(short = 'f', long = "file", default_value_t = String::from("rustapple.mp4"))]
     file: String,
 
     /// The audio file for the application
-    #[arg(short = 'a', long = "audio", default_value_t = String::from(""))]
+    #[arg(short = 'a', long = "audio", default_value_t = String::from("rustapple_audio.mp3"))]
     audio_file: String,
 
     /// Number of threads for video processing
     // TODO: Doesn't work yet
     #[arg(short = 't', long = "threads", default_value_t = 4)]
     threads: usize,
+
+    /// YT URL to download the video from
+    #[arg(short = 'y', long = "ytdownload", default_value_t = String::from(""))]
+    yt_url: String,
+
+    /// Terminal width
+    #[arg(short = 'w', long = "width", default_value_t = 100)]
+    width: usize,
 }
 
 fn main() {
@@ -65,11 +71,15 @@ fn main() {
     debug!("Logging initialized");
 
     // CLI Parser
-    let cli: Cli = Cli::parse();
+    let mut cli: Cli = Cli::parse();
+
+    // Get video_file path
+    if cli.yt_url != "" {
+        (cli.file, cli.audio_file) = yt_download(&cli.yt_url);
+    }
 
     // Create the array of frames
-    let vid: Video = read_video_file(&cli.file);
-    // let imgs: Vec<Image> = read_image_directory("./images").unwrap();
+    let vid: Video = read_video_file(&cli.file, &cli.width, &cli.threads);
 
     // Create the audio thread
     let mut handler: Option<JoinHandle<()>> = None;
@@ -111,6 +121,50 @@ fn play_audio(path: &str, duration: u64) {
     std::thread::sleep(std::time::Duration::from_secs(duration)); // Ensure time duration
 }
 
+/// YT-Downloader
+fn yt_download(url: &str) -> (String, String) {
+    use std::process::Command;
+    // Check if yt-dlp is installed
+    Command::new("yt-dlp").arg("--version").output().expect("Failed to execute command `yt-dlp --version`. This is probably because yt-dlp is not installed. Please install yt-dlp to download youtube videos.");
+
+    // Clean up existing rustapple files
+    Command::new("rm")
+        .arg("rustapple.opus")
+        .output()
+        .expect("Failed to remove all existing rustapple files");
+    Command::new("rm")
+        .arg("rustapple.mp4")
+        .output()
+        .expect("Failed to remove all existing rustapple files");
+
+    // Download video and audio
+    Command::new("yt-dlp")
+        .arg(url)
+        .arg("-o")
+        .arg("rustapple.mp4")
+        .arg("-f")
+        .arg("mp4")
+        .output()
+        .expect("Failed to download video file");
+
+    Command::new("yt-dlp")
+        .arg(url)
+        .arg("-o")
+        .arg("rustapple_audio.mp3")
+        .arg("-x")
+        .arg("--audio-format")
+        .arg("mp3")
+        .arg("--force-overwrites")
+        .output()
+        .expect("Failed to download audio file");
+
+    // Return default paths
+    (
+        "rustapple.mp4".to_string(),
+        "rustapple_audio.mp3".to_string(),
+    )
+}
+
 /// Converts a single pixel to the corresponding ascii symbol
 fn convert_pixel(pixel: u8) -> char {
     assert!(((pixel / 25) as usize) < CHARS.len());
@@ -130,7 +184,7 @@ fn convert_image_to_ascii_line(img: &Image) -> Vec<String> {
     res
 }
 
-fn read_video_file(path: &str) -> Video {
+fn read_video_file(path: &str, width: &usize, threads: &usize) -> Video {
     use video_rs::decode::Decoder;
 
     let url: &Path = Path::new(path);
@@ -138,13 +192,17 @@ fn read_video_file(path: &str) -> Video {
     Video {
         duration: decoder.duration().unwrap().as_secs() as usize,
         fps: decoder.frame_rate() as usize,
-        images: convert_video_to_images(decoder),
+        images: convert_video_to_images(decoder, *width, *threads),
     }
 }
 
 /// Converts the frames from the video decoder to an array of images that are downscaled and
 /// grayscale
-fn convert_video_to_images(decoder: video_rs::decode::Decoder) -> Vec<Image> {
+fn convert_video_to_images(
+    decoder: video_rs::decode::Decoder,
+    width: usize,
+    threads_count: usize,
+) -> Vec<Image> {
     use image::DynamicImage::ImageRgb8;
     use image::RgbImage;
 
@@ -152,9 +210,9 @@ fn convert_video_to_images(decoder: video_rs::decode::Decoder) -> Vec<Image> {
     let dec: Arc<Mutex<video_rs::decode::Decoder>> = Arc::new(Mutex::new(decoder));
     let res: Arc<Mutex<Vec<Image>>> = Arc::new(Mutex::new(Vec::with_capacity(7000))); // Upperbound for bad apple
 
-    let mut threads: Vec<JoinHandle<()>> = Vec::with_capacity(THREAD_COUNT);
+    let mut threads: Vec<JoinHandle<()>> = Vec::with_capacity(threads_count);
 
-    for _ in 0..THREAD_COUNT {
+    for _ in 0..threads_count {
         let dec = Arc::clone(&dec);
         let counter = Arc::clone(&counter);
         let res = Arc::clone(&res);
@@ -178,7 +236,7 @@ fn convert_video_to_images(decoder: video_rs::decode::Decoder) -> Vec<Image> {
                     )
                     .to_luma8();
                     // Resize
-                    img = resize(&img, SIZE.0, SIZE.1, FilterType::Nearest);
+                    img = resize(&img, width as u32, (width / 2) as u32, FilterType::Nearest);
 
                     // Critical section of changing the image counter
                     {
@@ -186,8 +244,8 @@ fn convert_video_to_images(decoder: video_rs::decode::Decoder) -> Vec<Image> {
                         img_array.push(Image {
                             data: img.to_vec(),
                             number: n as usize,
-                            width: SIZE.0,
-                            height: SIZE.1,
+                            width: width as u32,
+                            height: (width / 2) as u32,
                         });
 
                         // Progress display
