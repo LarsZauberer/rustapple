@@ -78,6 +78,12 @@ fn main() {
         (cli.file, cli.audio_file) = yt_download(&cli.yt_url);
     }
 
+    // Check if video file exists
+    if !Path::new(&cli.file).exists() {
+        error!("No video file found");
+        panic!("No video file found");
+    }
+
     // Create the array of frames
     let vid: Video = read_video_file(&cli.file, &cli.width, &cli.threads);
 
@@ -121,9 +127,15 @@ fn play_audio(path: &str, duration: u64) {
     std::thread::sleep(std::time::Duration::from_secs(duration)); // Ensure time duration
 }
 
-/// YT-Downloader
+/// YT-Downloader. Downloads a specified youtube video and the video is split in video and audio.
+/// The output is always in the current directory at `rustapple.mp4` (video) and `rustapple_audio.mp3`
+/// (audio)
 fn yt_download(url: &str) -> (String, String) {
+    use log::info;
     use std::process::Command;
+
+    info!("Starting to download the youtube video: {}", url);
+
     // Check if yt-dlp is installed
     Command::new("yt-dlp").arg("--version").output().expect("Failed to execute command `yt-dlp --version`. This is probably because yt-dlp is not installed. Please install yt-dlp to download youtube videos.");
 
@@ -158,6 +170,8 @@ fn yt_download(url: &str) -> (String, String) {
         .output()
         .expect("Failed to download audio file");
 
+    info!("Finished download. Files are in `rustapple.mp4` and `rustapple_audio.mp3`");
+
     // Return default paths
     (
         "rustapple.mp4".to_string(),
@@ -184,6 +198,7 @@ fn convert_image_to_ascii_line(img: &Image) -> Vec<String> {
     res
 }
 
+/// Reads a specified video file (tested with `.mp4`) and returns a `Video` struct.
 fn read_video_file(path: &str, width: &usize, threads: &usize) -> Video {
     use video_rs::decode::Decoder;
 
@@ -270,6 +285,7 @@ fn convert_video_to_images(
         let _ = i.join();
     }
 
+    // Put frames in the correct order
     let mut r = res.lock().unwrap().to_vec();
     r.sort_by_key(|i| i.number);
     r
